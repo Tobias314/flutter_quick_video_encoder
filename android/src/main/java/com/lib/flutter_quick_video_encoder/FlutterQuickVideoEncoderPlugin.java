@@ -24,13 +24,26 @@ import io.flutter.plugin.common.MethodCall;
 import io.flutter.plugin.common.MethodChannel;
 
 class InputData {
-    enum DataType { VIDEO, AUDIO, STOP }
+    enum DataType {
+        VIDEO, VIDEO_UYV420, AUDIO, STOP
+    }
+
     public DataType type;
-    public byte[] data;
+    public byte[] data = null;
+    public byte[] y = null;
+    public byte[] u = null;
+    public byte[] v = null;
 
     public InputData(DataType type, byte[] data) {
         this.type = type;
         this.data = data;
+    }
+
+    public InputData(DataType type, byte[] y, byte[] u, byte[] v) {
+        this.type = type;
+        this.y = y;
+        this.u = u;
+        this.v = v;
     }
 }
 
@@ -45,9 +58,8 @@ class EncodedData {
 }
 
 public class FlutterQuickVideoEncoderPlugin implements
-    FlutterPlugin,
-    MethodChannel.MethodCallHandler
-{
+        FlutterPlugin,
+        MethodChannel.MethodCallHandler {
     private static final String TAG = "[FQVE-Android]";
     private static final String CHANNEL_NAME = "flutter_quick_video_encoder/methods";
 
@@ -90,15 +102,13 @@ public class FlutterQuickVideoEncoderPlugin implements
 
     @Override
     public void onMethodCall(MethodCall call, MethodChannel.Result result) {
-        try{
+        try {
             switch (call.method) {
-                case "setLogLevel":
-                {
+                case "setLogLevel": {
                     result.success(null);
                     break;
                 }
-                case "setup":
-                {
+                case "setup": {
                     // Clear queues
                     inputQueue.clear();
                     videoQueue.clear();
@@ -108,14 +118,14 @@ public class FlutterQuickVideoEncoderPlugin implements
                     stopProcessingThread();
 
                     // Extract parameters
-                    int width =         call.argument("width");
-                    int height =        call.argument("height");
-                    int fps =           call.argument("fps");
-                    int videoBitrate =  call.argument("videoBitrate");
+                    int width = call.argument("width");
+                    int height = call.argument("height");
+                    int fps = call.argument("fps");
+                    int videoBitrate = call.argument("videoBitrate");
                     int audioChannels = call.argument("audioChannels");
-                    int audioBitrate =  call.argument("audioBitrate");
-                    int sampleRate =    call.argument("sampleRate");
-                    String filepath =   call.argument("filepath");
+                    int audioBitrate = call.argument("audioBitrate");
+                    int sampleRate = call.argument("sampleRate");
+                    String filepath = call.argument("filepath");
 
                     // save
                     mFps = fps;
@@ -142,7 +152,7 @@ public class FlutterQuickVideoEncoderPlugin implements
                             result.error("UnsupportedColorFormat", "COLOR_FormatYUV420Flexible is not supported", null);
                             return;
                         }
-                            
+
                         // Video format
                         Log.i(TAG, "calling MediaFormat.createVideoFormat()");
                         MediaFormat videoFormat = MediaFormat.createVideoFormat("video/avc", width, height);
@@ -150,9 +160,8 @@ public class FlutterQuickVideoEncoderPlugin implements
                         videoFormat.setInteger(MediaFormat.KEY_FRAME_RATE, fps);
                         videoFormat.setInteger(MediaFormat.KEY_COLOR_FORMAT, colorFormat);
                         videoFormat.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1);
-                        //videoFormat.setInteger(MediaFormat.KEY_LATENCY, 1);
+                        // videoFormat.setInteger(MediaFormat.KEY_LATENCY, 1);
 
-                        
                         // Video encoder
                         mVideoEncoder = MediaCodec.createEncoderByType("video/avc");
                         Log.i(TAG, "calling mVideoEncoder.configure()");
@@ -180,7 +189,8 @@ public class FlutterQuickVideoEncoderPlugin implements
 
                         // Audio format
                         Log.i(TAG, "calling MediaFormat.createAudioFormat()");
-                        MediaFormat audioFormat = MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_AAC, sampleRate, audioChannels);
+                        MediaFormat audioFormat = MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_AAC,
+                                sampleRate, audioChannels);
                         audioFormat.setInteger(MediaFormat.KEY_BIT_RATE, audioBitrate);
                         audioFormat.setInteger(MediaFormat.KEY_AAC_PROFILE, audioProfile);
 
@@ -207,8 +217,7 @@ public class FlutterQuickVideoEncoderPlugin implements
 
                     break;
                 }
-                case "appendVideoFrame":
-                {
+                case "appendVideoFrame": {
                     // if processing error, throw exception
                     if (processingResult.isDone()) {
                         processingResult.get();
@@ -231,8 +240,27 @@ public class FlutterQuickVideoEncoderPlugin implements
                     result.success(null);
                     break;
                 }
-                case "appendAudioFrame":
-                {
+                case "appendVideoFrameYuv420": {
+                    // if processing error, throw exception
+                    if (processingResult.isDone()) {
+                        processingResult.get();
+                    }
+
+                    byte[] y = call.argument("y");
+                    byte[] u = call.argument("u");
+                    byte[] v = call.argument("v");
+
+                    // Create InputData
+                    InputData inputData = new InputData(InputData.DataType.VIDEO_UYV420, y = y, u = u, v = v);
+
+                    // Put InputData into inputQueue (blocks if full)
+                    inputQueue.put(inputData);
+
+                    // Return immediately
+                    result.success(null);
+                    break;
+                }
+                case "appendAudioFrame": {
                     // if processing error, throw exception
                     if (processingResult.isDone()) {
                         processingResult.get();
@@ -250,8 +278,7 @@ public class FlutterQuickVideoEncoderPlugin implements
                     result.success(null);
                     break;
                 }
-                case "finish":
-                {
+                case "finish": {
                     // if processing error, throw exception
                     if (processingResult.isDone()) {
                         processingResult.get();
@@ -283,7 +310,7 @@ public class FlutterQuickVideoEncoderPlugin implements
     private void stopProcessingThread() throws InterruptedException {
         if (processingThread != null && processingThread.isAlive()) {
             inputQueue.put(new InputData(InputData.DataType.STOP, null));
-            processingThread.join(); 
+            processingThread.join();
         }
     }
 
@@ -297,8 +324,14 @@ public class FlutterQuickVideoEncoderPlugin implements
                         // Finish processing
                         break;
                     } else if (inputData.type == InputData.DataType.VIDEO) {
-                        byte[] yuv420 = inputData.data;
-                        feedVideoEncoder(yuv420);
+                        byte[] rgba_data = inputData.data;
+                        feedVideoEncoderRgba(rgba_data);
+                        drainEncoder(mVideoEncoder, false);
+                    } else if (inputData.type == InputData.DataType.VIDEO_UYV420) {
+                        byte[] y = inputData.y;
+                        byte[] u = inputData.u;
+                        byte[] v = inputData.v;
+                        feedVideoEncoderYuv420(y, u, v);
                         drainEncoder(mVideoEncoder, false);
                     } else if (inputData.type == InputData.DataType.AUDIO) {
                         byte[] rawPcmArray = inputData.data;
@@ -333,13 +366,13 @@ public class FlutterQuickVideoEncoderPlugin implements
             } catch (Exception e) {
                 Log.e(TAG, "Error in processing thread", e);
                 processingResult.completeExceptionally(e);
-                inputQueue.clear();  // release input threads
+                inputQueue.clear(); // release input threads
             }
         });
         processingThread.start();
     }
 
-    private void feedVideoEncoder(byte[] yuv420) throws Exception {
+    private void feedVideoEncoderRgba(byte[] rgba) throws Exception {
         // Calculate presentation time
         long presentationTime = mVideoFrameIdx * 1000000L / mFps;
 
@@ -354,7 +387,7 @@ public class FlutterQuickVideoEncoderPlugin implements
             Image image = mVideoEncoder.getInputImage(inIdx);
 
             // Fill image with YUV data
-            fillImage(image, yuv420, mWidth, mHeight);
+            fillImage(image, rgba, mWidth, mHeight);
 
             // Queue input buffer
             mVideoEncoder.queueInputBuffer(inIdx, 0, size, presentationTime, 0);
@@ -362,6 +395,33 @@ public class FlutterQuickVideoEncoderPlugin implements
 
         // Increment frame index
         mVideoFrameIdx++;
+    }
+
+    private void feedVideoEncoderYuv420(byte[] y, byte[] u, byte[] v) throws Exception {
+        // // Calculate presentation time
+        // long presentationTime = mVideoFrameIdx * 1000000L / mFps;
+
+        // // Dequeue input buffer
+        // int inIdx = mVideoEncoder.dequeueInputBuffer(-1);
+        // if (inIdx >= 0) {
+        //     // Get buffer size
+        //     ByteBuffer buffer = mVideoEncoder.getInputBuffer(inIdx);
+        //     int size = buffer.capacity();
+
+        //     // Get input image
+        //     Image image = mVideoEncoder.getInputImage(inIdx);
+
+        //     Image.Plane[] planes = image.getPlanes();
+        //     planes[0].getBuffer().put(y);
+        //     planes[1].getBuffer().put(u);
+        //     planes[2].getBuffer().put(v);
+
+        //     // Queue input buffer
+        //     //mVideoEncoder.queueInputBuffer(inIdx, 0, size, presentationTime, 0);
+        // }
+
+        // // Increment frame index
+        // mVideoFrameIdx++;
     }
 
     private void feedAudioEncoder(byte[] rawPcmArray) throws Exception {
@@ -577,8 +637,8 @@ public class FlutterQuickVideoEncoderPlugin implements
     /**
      * Extracts all pending data from the specified encoder & feed it to the muxer.
      *
-     * @param encoder The MediaCodec encoder to drain.
-     * @param trackIndex The muxer track index associated with this encoder.
+     * @param encoder     The MediaCodec encoder to drain.
+     * @param trackIndex  The muxer track index associated with this encoder.
      * @param endOfStream If true, signals end-of-stream to the encoder.
      */
     private void drainEncoder(MediaCodec encoder, boolean endOfStream) {
@@ -592,14 +652,11 @@ public class FlutterQuickVideoEncoderPlugin implements
         while (true) {
             int encoderStatus = encoder.dequeueOutputBuffer(bufferInfo, TIMEOUT_USEC);
 
-            if (encoderStatus == MediaCodec.INFO_TRY_AGAIN_LATER)
-            {
+            if (encoderStatus == MediaCodec.INFO_TRY_AGAIN_LATER) {
                 if (!endOfStream) {
                     break; // Exit the loop if not EOS
                 }
-            } 
-            else if (encoderStatus == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED)
-            {
+            } else if (encoderStatus == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
                 MediaFormat newFormat = encoder.getOutputFormat();
                 Log.i(TAG, "calling mMediaMuxer.addTrack()");
                 if (encoder == mVideoEncoder) {
@@ -613,14 +670,10 @@ public class FlutterQuickVideoEncoderPlugin implements
                     mMediaMuxer.start();
                     mMuxerStarted = true;
                 }
-            }
-            else if (encoderStatus < 0)
-            {
+            } else if (encoderStatus < 0) {
                 // Ignore unexpected status.
                 Log.e(TAG, "encoderStatus < 0");
-            } 
-            else 
-            {
+            } else {
                 ByteBuffer encodedData = encoder.getOutputBuffer(encoderStatus);
                 if (encodedData == null) {
                     throw new RuntimeException("encoderOutputBuffer " + encoderStatus + " was null");

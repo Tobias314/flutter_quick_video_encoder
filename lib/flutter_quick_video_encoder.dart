@@ -86,6 +86,16 @@ class FlutterQuickVideoEncoder {
     });
   }
 
+  /// append yuv420 video frame
+  static Future<void> appendVideoFrameYuv420(Uint8List y, Uint8List u, Uint8List v) async {
+    //assert(rawRgba.length == width * height * 4, "invalid data length");
+    return await _invokeMethod('appendVideoFrameYuv420', {
+      'y': y,
+      'u': u,
+      'v': v,
+    });
+  }
+
   /// append raw pcm audio samples
   ///  - 16 bit, little-endiant
   ///  - when using stereo audio, samples should be interleaved left channel first
