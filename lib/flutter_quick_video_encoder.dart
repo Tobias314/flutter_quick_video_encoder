@@ -28,7 +28,7 @@ enum ProfileLevel {
 }
 
 class FlutterQuickVideoEncoder {
-  static const MethodChannel _channel = const MethodChannel('flutter_quick_video_encoder/methods');
+  static const MethodChannel _channel = MethodChannel('flutter_quick_video_encoder/methods');
 
   // setup values
   static int width = 0;

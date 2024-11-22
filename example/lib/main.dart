@@ -28,6 +28,8 @@ class MyApp extends StatelessWidget {
 }
 
 class FqveApp extends StatefulWidget {
+  const FqveApp({Key? key}) : super(key: key);
+
   @override
   _FqveAppState createState() => _FqveAppState();
 }
